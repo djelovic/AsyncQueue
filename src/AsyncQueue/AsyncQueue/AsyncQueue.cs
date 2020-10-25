@@ -8,83 +8,119 @@ using System.Threading.Tasks;
 
 namespace Dejan.Jelovic.AsyncQueue {
 
-    struct State {
-        private const int _low30Bits = (1 << 30) - 1;
-        private const long _top4bits = 15L << 60;
-
-        public const long WriteCompletedFlag = 1L << 63;
-        public const long ReadCompletedFlag = 1L << 62;
-        public const long HasReadAwaiterFlag = 1L << 61;
-        public const long HasWriteAwaiterFlag = 1L << 60;
-
-        private long _state;
-
-        public bool IsWriteCompleted => (_state & WriteCompletedFlag) != 0;
-        public bool IsReadCompleted => (_state & ReadCompletedFlag) != 0;
-        public bool HasReadAwaiter => (_state & HasReadAwaiterFlag) != 0;
-        public bool HasWriteAwaiter => (_state & HasWriteAwaiterFlag) != 0;
-
-        public int Start => (int)_state & _low30Bits;
-        public int Count => (int)(_state >> 30) & _low30Bits;
-        public long Flags => _state & _top4bits;
-
-        public State(bool isWriteCompleted, bool isReadCompleted, bool hasReadAwaiter, bool hasWriteAwaiter, int start, int count) {
-            Debug.Assert((!hasReadAwaiter || count == 0) && start >= 0 && count >= 0);
-
-            _state =
-                (isWriteCompleted ? WriteCompletedFlag : 0) |
-                (isReadCompleted ? ReadCompletedFlag : 0) |
-                (hasReadAwaiter ? HasReadAwaiterFlag : 0) |
-                (hasWriteAwaiter ? HasWriteAwaiterFlag : 0) |
-                (uint)start |
-                ((long)(uint)count << 30)
-                ;
-        }
-
-        public State(long flags, int start, int count) {
-            Debug.Assert(((flags & HasReadAwaiterFlag) == 0 || count == 0) && start >= 0 && count >= 0);
-
-            _state =
-                flags |
-                (uint)start |
-                ((long)(uint)count << 30)
-                ;
-        }
-
-        private State(long state) =>
-            _state = state;
-
-        public bool TryWrite(ref State lastKnown, State writeIfSame) {
-            var found = Interlocked.CompareExchange(ref _state, writeIfSame._state, lastKnown._state);
-            bool success = found == lastKnown._state;
-            lastKnown = new State(success ? writeIfSame._state : found);
-            return success;
-        }
-
-        public static bool operator ==(State x, State y) => x._state == y._state;
-        public static bool operator !=(State x, State y) => x._state != y._state;
-
-        public override int GetHashCode() => _state.GetHashCode();
-
-        public override bool Equals(object? obj) => obj is State other && this == other;
-
-        public State ReadAtomic() => new State(Interlocked.Read(ref _state));
-    }
 
     public abstract class AsyncQueueBase {
+        private protected struct State {
+            private const int _low30Bits = (1 << 30) - 1;
+            private const long _top4bits = 15L << 60;
+
+            public const long WriteCompletedFlag = 1L << 63;
+            public const long ReadCompletedFlag = 1L << 62;
+            public const long HasReadAwaiterFlag = 1L << 61;
+            public const long HasWriteAwaiterFlag = 1L << 60;
+
+            private long _state;
+
+            public bool IsWriteCompleted => (_state & WriteCompletedFlag) != 0;
+            public bool IsReadCompleted => (_state & ReadCompletedFlag) != 0;
+            public bool HasReadAwaiter => (_state & HasReadAwaiterFlag) != 0;
+            public bool HasWriteAwaiter => (_state & HasWriteAwaiterFlag) != 0;
+
+            public int Start => (int)_state & _low30Bits;
+            public int Count => (int)(_state >> 30) & _low30Bits;
+            public long Flags => _state & _top4bits;
+
+            public State(long flags, int start, int count) {
+                Debug.Assert(((flags & HasReadAwaiterFlag) == 0 || count == 0) && start >= 0 && count >= 0);
+
+                _state =
+                    flags |
+                    (uint)start |
+                    ((long)(uint)count << 30)
+                    ;
+            }
+
+            private State(long state) =>
+                _state = state;
+
+            public bool TryWrite(ref State lastKnown, State writeIfSame) {
+                var found = Interlocked.CompareExchange(ref _state, writeIfSame._state, lastKnown._state);
+                bool success = found == lastKnown._state;
+                lastKnown = new State(success ? writeIfSame._state : found);
+                return success;
+            }
+
+            public static bool operator ==(State x, State y) => x._state == y._state;
+            public static bool operator !=(State x, State y) => x._state != y._state;
+
+            public override int GetHashCode() => _state.GetHashCode();
+
+            public override bool Equals(object? obj) => obj is State other && this == other;
+
+            public State ReadAtomic() => new State(Interlocked.Read(ref _state));
+        }
+
+        private protected State _state;
+        private protected Exception? _exception;
+
+        private protected readonly ReusableTaskCompletionSource<bool> _readWaiter = new ReusableTaskCompletionSource<bool>();
+        private protected readonly ReusableTaskCompletionSource<bool> _writeWaiter = new ReusableTaskCompletionSource<bool>();
+
+        private protected AsyncQueueBase() {
+        }
+
         private protected static void ThrowInvalidOperation() => throw new InvalidOperationException();
+
+        public ValueTask DisposeAsync() {
+            var state = _state.ReadAtomic();
+
+            for (; ; ) {
+                if (state.HasReadAwaiter) ThrowInvalidOperation();
+                if (state.IsReadCompleted) break;
+
+                bool hasWriteAwaiters = state.HasWriteAwaiter;
+                var newState = new State((state.Flags & State.WriteCompletedFlag) | State.ReadCompletedFlag, state.Start, state.Count);
+                if (_state.TryWrite(ref state, newState)) {
+                    if (hasWriteAwaiters) _writeWaiter.SetResult(false);
+                    break;
+                }
+            }
+
+            return new ValueTask();
+        }
+
+        public void Complete(Exception? ex = null) {
+            var writeState = _state.ReadAtomic();
+
+            _exception = ex;
+
+            for (; ; ) {
+                if (writeState.IsReadCompleted) break;
+                if (writeState.IsWriteCompleted || writeState.HasWriteAwaiter) ThrowInvalidOperation();
+
+                var hasReadAwaiter = writeState.HasReadAwaiter;
+                var newState = new State(State.WriteCompletedFlag, writeState.Start, writeState.Count);
+                if (_state.TryWrite(ref writeState, newState)) {
+                    if (hasReadAwaiter) {
+                        if (ex != null) {
+                            _readWaiter.SetException(ex);
+                        }
+                        else {
+                            _readWaiter.SetResult(false);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     public class AsyncQueue<T> : AsyncQueueBase, IAsyncEnumerator<T> {
-        private State _state;
-        private T[] _buffer;
+        private readonly T[] _buffer;
         private readonly int _bufferMask;
-        private T _current = default!;
-        private Exception? _exception;
 
+        private T _current = default!;
         private T _pendingWriteValue = default!;
-        private readonly ReusableTaskCompletionSource<bool> _readWaiter = new ReusableTaskCompletionSource<bool>();
-        private readonly ReusableTaskCompletionSource<bool> _writeWaiter = new ReusableTaskCompletionSource<bool>();
 
         public AsyncQueue(int capacity) {
             if (capacity <= 0 || capacity > (1 << 30)) throw new ArgumentOutOfRangeException(nameof(capacity));
@@ -150,24 +186,6 @@ namespace Dejan.Jelovic.AsyncQueue {
 
         public T Current => _current;
 
-        public ValueTask DisposeAsync() {
-            var state = _state.ReadAtomic();
-
-            for (; ; ) {
-                if (state.HasReadAwaiter) ThrowInvalidOperation();
-                if (state.IsReadCompleted) break;
-
-                bool hasWriteAwaiters = state.HasWriteAwaiter;
-                var newState = new State((state.Flags & State.WriteCompletedFlag) | State.ReadCompletedFlag, state.Start, state.Count);
-                if (_state.TryWrite(ref state, newState)) {
-                    if (hasWriteAwaiters) _writeWaiter.SetResult(false);
-                    break;
-                }
-            }
-
-            return new ValueTask();
-        }
-
         public ValueTask<bool> WriteAsync(T val) {
             var state = _state.ReadAtomic();
 
@@ -196,31 +214,6 @@ namespace Dejan.Jelovic.AsyncQueue {
                     if (_state.TryWrite(ref state, newState)) {
                         return _writeWaiter.GetResultAsync();
                     }
-                }
-            }
-        }
-
-        public void Complete(Exception? ex = null) {
-            var writeState = _state.ReadAtomic();
-
-            _exception = ex;
-
-            for (; ; ) {
-                if (writeState.IsReadCompleted) break;
-                if (writeState.IsWriteCompleted || writeState.HasWriteAwaiter) ThrowInvalidOperation();
-
-                var hasReadAwaiter = writeState.HasReadAwaiter;
-                var newState = new State(State.WriteCompletedFlag, writeState.Start, writeState.Count);
-                if (_state.TryWrite(ref writeState, newState)) {
-                    if (hasReadAwaiter) {
-                        if (ex != null) {
-                            _readWaiter.SetException(ex);
-                        }
-                        else {
-                            _readWaiter.SetResult(false);
-                        }
-                    }
-                    break;
                 }
             }
         }
