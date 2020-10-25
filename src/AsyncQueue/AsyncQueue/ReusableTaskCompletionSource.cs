@@ -7,7 +7,7 @@ using System.Threading.Tasks.Sources;
 
 namespace Dejan.Jelovic.AsyncQueue {
 
-    abstract class ReusableTaskCompletionSourceBase : IThreadPoolWorkItem {
+    public abstract class ReusableTaskCompletionSourceBase : IThreadPoolWorkItem {
         private ExecutionContext? _executionContext;
         private Action<object?>? _scheduledContinuation;
         private object? _state;
@@ -229,7 +229,7 @@ namespace Dejan.Jelovic.AsyncQueue {
     /// it will throw an <see cref="InvalidOperationException"/>.
     /// </summary>
     /// <typeparam name="TResult">Type of value to store.</typeparam>
-    sealed class ReusableTaskCompletionSource<TResult> : ReusableTaskCompletionSourceBase, IValueTaskSource<TResult> {
+    public sealed class ReusableTaskCompletionSource<TResult> : ReusableTaskCompletionSourceBase, IValueTaskSource<TResult> {
         private TResult _result = default(TResult)!;
 
         /// <summary>
@@ -343,7 +343,7 @@ namespace Dejan.Jelovic.AsyncQueue {
     /// calling <see cref="GetResultAsync"/> before the previously returned <see cref="ValueTask"/> has been read is invalid and
     /// it will throw an <see cref="InvalidOperationException"/>.
     /// </summary>
-    sealed class ReusableTaskCompletionSource : ReusableTaskCompletionSourceBase, IValueTaskSource {
+    public sealed class ReusableTaskCompletionSource : ReusableTaskCompletionSourceBase, IValueTaskSource {
         /// <summary>
         /// Sets the value to be read using a call to <see cref="GetResultAsync"/>.
         /// </summary>
