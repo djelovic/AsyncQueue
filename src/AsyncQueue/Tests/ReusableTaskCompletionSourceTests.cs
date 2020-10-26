@@ -7,7 +7,7 @@ public class ReusableTaskCompletionSourceTests {
     private static async Task<T> Await<T>(ValueTask<T> task) => await task.ConfigureAwait(false);
 
     [Fact]
-    async Task AllCombinations() {
+    public async Task AllCombinations() {
         var tcs = new ReusableTaskCompletionSource<int>();
 
         // write then read
