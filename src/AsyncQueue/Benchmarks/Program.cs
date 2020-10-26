@@ -9,7 +9,7 @@ using BenchmarkDotNet.Running;
 public class ReusableTaskCompletionSourceBenchmarks {
     [Benchmark]
     public async Task BenchmarkReusableTaskCompletionSource() {
-        const int iterations = 1_000_0000;
+        const int iterations = 1_000_000;
 
         var left = new ReusableTaskCompletionSource<int>();
         var right = new ReusableTaskCompletionSource<int>();
@@ -38,4 +38,6 @@ public class ReusableTaskCompletionSourceBenchmarks {
 
 class Program {
     static void Main() => BenchmarkRunner.Run<ReusableTaskCompletionSourceBenchmarks>();
+
+    //static Task Main() => new ReusableTaskCompletionSourceBenchmarks().BenchmarkReusableTaskCompletionSource();
 }

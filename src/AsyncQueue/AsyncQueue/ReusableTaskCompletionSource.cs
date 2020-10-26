@@ -266,7 +266,6 @@ namespace Dejan.Jelovic.AsyncQueue {
 
                         _exception = null;
                         _result = default!;
-                        ++_token;
 
                         var expectContinuationScheduled = Interlocked.Exchange(ref _continuation, null);
                         Debug.Assert(expectContinuationScheduled == ContinuationScheduledMarker);
@@ -275,10 +274,13 @@ namespace Dejan.Jelovic.AsyncQueue {
                     }
                     else {
                         continuation = prevValue;
+                        continuationInitialized = true;
                     }
                 }
                 else if (continuation == null) {
-                    if (continuationInitialized) return new ValueTask<TResult>(this, _token);
+                    if (continuationInitialized) {
+                        return new ValueTask<TResult>(this, ++_token);
+                    }
                     else {
                         continuation = Interlocked.CompareExchange(ref _continuation, null, null);
                         continuationInitialized = true;
@@ -300,7 +302,6 @@ namespace Dejan.Jelovic.AsyncQueue {
             if (_exception != null) {
                 var ex = _exception;
                 _exception = null;
-                ++_token;
 
                 var prevValue = Interlocked.Exchange(ref _continuation, null);
                 Debug.Assert(prevValue == ResultSetMarker || prevValue == ContinuationScheduledMarker);
@@ -311,7 +312,6 @@ namespace Dejan.Jelovic.AsyncQueue {
             else {
                 var ret = _result;
                 _result = default!;
-                ++_token;
 
                 var prevValue = Interlocked.Exchange(ref _continuation, null);
                 Debug.Assert(prevValue == ResultSetMarker || prevValue == ContinuationScheduledMarker);
@@ -375,7 +375,6 @@ namespace Dejan.Jelovic.AsyncQueue {
                             new ValueTask();
 
                         _exception = null;
-                        ++_token;
 
                         var expectContinuationScheduled = Interlocked.Exchange(ref _continuation, null);
                         Debug.Assert(expectContinuationScheduled == ContinuationScheduledMarker);
@@ -387,7 +386,7 @@ namespace Dejan.Jelovic.AsyncQueue {
                     }
                 }
                 else if (continuation == null) {
-                    if (continuationInitialized) return new ValueTask(this, _token);
+                    if (continuationInitialized) return new ValueTask(this, ++_token);
                     else {
                         continuation = Interlocked.CompareExchange(ref _continuation, null, null);
                         continuationInitialized = true;
@@ -409,7 +408,6 @@ namespace Dejan.Jelovic.AsyncQueue {
             if (_exception != null) {
                 var ex = _exception;
                 _exception = null;
-                ++_token;
 
                 var prevValue = Interlocked.Exchange(ref _continuation, null);
                 Debug.Assert(prevValue == ResultSetMarker || prevValue == ContinuationScheduledMarker);
@@ -418,8 +416,6 @@ namespace Dejan.Jelovic.AsyncQueue {
                 throw ex;
             }
             else {
-                ++_token;
-
                 var prevValue = Interlocked.Exchange(ref _continuation, null);
                 Debug.Assert(prevValue == ResultSetMarker || prevValue == ContinuationScheduledMarker);
             }
